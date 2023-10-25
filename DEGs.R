@@ -14,21 +14,32 @@ setwd('E:\\2023\\August 2023\\R data')
 all_counts = read.csv('GeneCountsAllSamplesNegNormalised.csv', 
                       row.names=1, check.names=FALSE)
 
-ctrl_probes <- all_counts[grepl("^POS|^NEG", rownames(all_counts)),]
+ctrl_probes <- all_counts[grepl("^POS|^NEG", rownames(all_counts)),]  # positive and negative control probes
+housekeeping = c('Abcf1','Alas1','Edc3','Eef1g','Eif2b4','G6pdx',     # housekeeping genes
+                 'Hdac3','Hprt','Nubp1','Oaz1','Polr1b','Polr2a',
+                 'Ppia','Rpl19','Sap130','Sdha','Sf3a3','Tbd',
+                 'Tubb5')
 
 all_counts <- all_counts %>%
-  filter(rownames(all_counts) != "") %>%         # remove empty rows
-  mutate(across(everything(), ~ log2(.))) %>%    # transform all columns to log2
-  filter(!(rownames(all_counts) %in%             # remove control probes
-             rownames(ctrl_probes)))     
+  filter(
+    rownames(all_counts) != "",         # remove empty rows
+    !(rownames(all_counts) %in%         # remove control probes
+        rownames(ctrl_probes)),         
+    !(rownames(all_counts) %in%         # remove housekeeping genes
+        housekeeping)
+    )%>%
+    mutate(across(everything(), 
+                  ~ log2(.)))           # transform all columns to log2
 
 # 1.4 Load the meta data and extract relevant data
 pdata = read.csv('GeneCountLabelsAllSamples.csv', row.names=1, check.names=FALSE) 
 
 pdata = pdata %>%
-  filter(Bubble %in% c('OVA','MSA')) %>%           # only interested in the OVA and MSA data
-  filter(!(Label %in% c('6BT','7BM'))) %>%         # outliers/missing data points
-  rename('cd' = 'Cavitation dose')                 # to simplify
+  filter(
+    Bubble %in% c('OVA','MSA'),          # only interested in the OVA and MSA data
+    !(Label %in% c('6BT','7BM'))         # outliers/missing data points
+    ) %>%        
+  rename('cd' = 'Cavitation dose')       # to simplify
 
 ##### 2. Relate the data columns to the experiment design #####
 matching_columns <- intersect(colnames(all_counts), rownames(pdata)) 
@@ -75,37 +86,43 @@ threshold = quantile(pdata$cd,0.9)
 sort(pdata$cd)
 
 # 4.2 Generate table for data to be plotted 
-# -- coef needs to be changed depending on variable of interest
-all_genes <- topTable(fit_eBayes, coef = 2, number = Inf, sort.by = "P", adjust.method="BH") # Change coef based on MSA, OVA, OVA vs MSA
+all_genes = lapply(
+  list(MSA=1,OVA=2,OVAvsMSA=3), 
+  function(n) topTable(fit_eBayes, coef = n, number = Inf, sort.by = "P", adjust.method="BH"))
 
 # 4.3 Table for genes to be labeled in the volcano plot
-# -- coef needs to be changed depending on variable of interest
-top_genes <- topTable(fit_eBayes,coef = 2, sort.by='logFC', lfc=log2(2)/threshold, # 2-fold change for 5 nJ difference
-                      p.value=0.05,n=Inf)
+top_genes = lapply(
+  list(MSA=1,OVA=2,OVAvsMSA=3), 
+  function(n) topTable(fit_eBayes,coef = n, sort.by='logFC', lfc=log2(2)/threshold, # 2-fold change for 5 nJ difference
+                       p.value=0.05,n=Inf,adjust.method="BH"))
+
 
 # 4.4 Volcano plot
-EnhancedVolcano(all_genes,
-                lab = rownames(all_genes),
-                selectLab = rownames(top_genes),
-                labSize=3,
-                x='logFC',
-                y='P.Value',
-                FCcutoff=1/threshold,
-                pCutoff=max(all_genes[all_genes$adj.P.Val<0.05,]$P.Value),
-                xlab=bquote(~Log[2]~'FC/unit cavitation dose'),
-                xlim=c(-0.01,0.01),
-                ylim=c(0,8),
-                legendPosition = 'none',
-                max.overlaps=Inf,
-                title = "OVA MBs",
-                subtitle = bquote(italic('')),
+volcanoes = lapply(
+  list(MSA='MSA',OVA='OVA',OVAvsMSA='OVAvsMSA'),
+  function(cmp) EnhancedVolcano(all_genes[[cmp]],
+                                lab = rownames(all_genes[[cmp]]),
+                                selectLab = rownames(top_genes[[cmp]]),
+                                labSize=3,
+                                x='logFC',
+                                y='P.Value',
+                                FCcutoff=1/threshold,
+                                pCutoff=max(all_genes[[cmp]][all_genes[[cmp]]$adj.P.Val<0.05,]$P.Value),
+                                xlab=bquote(~Log[2]~'FC/unit cavitation dose'),
+                                xlim=c(-0.01,0.01),
+                                ylim=c(0,8),
+                                legendPosition = 'none',
+                                max.overlaps=Inf,
+                                title = cmp,
+                                subtitle = bquote(italic(''))
+  )
 )
+
+volcanoes
 
 ##### 5. Plot venndiagram #####
 dt <- decideTests(fit_eBayes)
 vennDiagram(dt[,1:2],names = c('MSA MBs','OVA MBs'),circle.col = c('turquoise', 'salmon'))
-
-
 
 ##### 6. Gene enrichment analysis #####
 
